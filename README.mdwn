@@ -1,0 +1,125 @@
+
+# 1. 距离函数
+### 1.1 什么是距离函数
+聚类的定义可以是这样的：对大量未知标注的数据集，按照数据内部存在的数据特征将数据集划分为多个不同的类别，使得类别内的数据比较相似，类别间的数据相似度较小。重点是计算样本之间的相似度，这个相似度有时候也称为样本间的距离。
+
+那么聚类中如何度量相似度呢？一般有两种方法，一种是对所有样本作特征投影，另一种则是距离计算。前者主要从直观的图像上反应样本之间的相似度关系，而后者则是通过衡量对象之间的差异度来反应样本之间的相似度关系。最常用的距离函数当然是欧式距离，但在这里，我将介绍额外的几个距离函数：
+### 1.2 Dynamic Time Warping（DTW）
+DTW 距离是序列信号在时间或者速度上不匹配的时候一种衡量相似度的方法。举个例子，两份原本一样声音样本A、B都说了“你好”，A在时间上发生了扭曲，“你”这个音延长了几秒。最后A:“你~~~好”，B：“你好”。DTW正是这样一种可以用来匹配A、B之间的最短距离的算法。
+### 1.3 Longest common subsequence (LCSS)
+DTW和欧式距离对轨迹的个别点差异性非常敏感，如果两个时间序列在大多数时间段具有相似的形态，仅仅在很短的时间具有一定的差异,（即很小的差异也会对相似度衡量产生影响）欧式距离和DTW无法准确衡量这两个时间序列的相似度。而LCSS能处理这种问题。
+
+### 1.4 RMSE
+RMSE 利用了欧式距离的简化版本，严格意义上不是一个距离函数，但是有不少的 research 中会用它的结果来和其他的距离函数做比较,我们来看一下网上是如何定义 RMSE 和欧式距离的：
+```text
+Euclidean distance simply refers to a metric of a specific type (a line between two points in a Euclidean space). Whereas RMSE is an error function for a specific purpose (the square root of the average squared distance between the actual score and the predicted score).
+```
+# 2. 如何自定义距离函数
+虽然 scikit-learn 这个库实现了很多的聚类函数,但是这些算法使用的距离大部分都是欧氏距离或者明科夫斯基距离,
+事实上,我们可以用不同的距离来度量两个向量之间的距离,但是很遗憾, scikit-learn 并没有提供自定义距离的选项.
+
+不用担心,我们可以间接实现这个东西.以DBSCAN算法为例,下面是类的一个构造函数:
+```python
+class sklearn.cluster.DBSCAN(eps=0.5, min_samples=5, metric='euclidean', algorithm='auto', leaf_size=30, p=None, n_jobs=1)
+# eps表示两个向量可以被视作为同一个类的最大的距离
+# min_samples表示一个类中至少要包含的元素数量,如果小于这个数量,那么不构成一个类
+```
+
+着重关注一下metric这个选项：
+```python
+metric : string, or callable
+    The metric to use when calculating distance between instances in a feature array. If metric is a string or callable, it must be one of the options allowed by metrics.pairwise.calculate_distance for its metric parameter. 
+    If metric is “precomputed”, X is assumed to be a distance matrix and must be square. X may be a sparse matrix, in which case only “nonzero” elements may be considered neighbors for DBSCAN.
+    New in version 0.17: metric precomputed to accept precomputed sparse matrix.
+```
+
+这段描述是说你可以自己提前计算各个向量的相似度,构成一个相似度的矩阵,只要你设置metric='precomputedd'就行,那么如何调用呢?我们来看一下 fit 函数：
+```python
+fit(X, y=None, sample_weight=None)
+# X : array or sparse (CSR) matrix of shape (n_samples, n_features), or array of shape (n_samples, n_samples)
+# A feature array, or array of distances between samples if metric='precomputed'.
+```
+
+翻译一下,如果你将metric设置成了precomputed的话,那么传入的X参数应该为各个向量之间的相似度矩阵,然后fit函数会直接用你这个矩阵来进行计算.否则的话,你还是要乖乖地传入(n_samples, n_features)形式的向量.
+
+这意味着我们可以用我们自定义的距离事先计算好各个向量的相似度,然后调用这个函数来获得结果.
+
+给个简单的例子.
+```python
+import numpy as np
+from sklearn.cluster import DBSCAN
+if __name__ == '__main__':
+    Y = np.array([[0, 1, 2],
+                  [1, 0, 3],
+                  [2, 3, 0]]) # 相似度矩阵,距离越小代表两个向量距离越近
+    # N = Y.shape[0]
+    db = DBSCAN(eps=0.13, metric='precomputed', min_samples=3).fit(Y)
+    labels = db.labels_
+    # 然后来看一下分类的结果吧!
+    n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0) # 类的数目
+    print('类的数目是:%d'%(n_clusters_))
+```
+
+给个具体的例子：
+```python
+import numpy as np
+from sklearn.cluster import DBSCAN
+from sklearn import metrics
+from sklearn.datasets.samples_generator import make_blobs
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+from sklearn.metrics.pairwise import euclidean_distances
+
+def draw_pic(n_clusters, core_samples_mask, labels, X):
+    ''' 开始绘制图片 '''
+    # Black removed and is used for noise instead.
+    unique_labels = set(labels)
+    colors = plt.cm.Spectral(np.linspace(0, 1, len(unique_labels)))
+    for k, col in zip(unique_labels, colors):
+        if k == -1:
+            # Black used for noise.
+            col = 'k'
+
+        class_member_mask = (labels == k)
+
+        xy = X[class_member_mask & core_samples_mask]
+        plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=col,
+                 markeredgecolor='k', markersize=14)
+
+        xy = X[class_member_mask & ~core_samples_mask]
+        plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=col,
+                 markeredgecolor='k', markersize=6)
+
+    plt.title('Estimated number of clusters: %d' % n_clusters)
+    plt.show()
+
+if __name__ == '__main__':
+    #=========首先产生数据===========#
+    centers = [[1, 1], [-1, -1], [1, -1]]
+    X, labels_true = make_blobs(n_samples=750, centers=centers,
+                                cluster_std=0.4, random_state=0)
+    X = StandardScaler().fit_transform(X)
+    #=========接下来开始聚类==========#
+    db = DBSCAN(eps=0.3, min_samples=10).fit(X)
+    labels = db.labels_ # 每个点的标签
+    core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
+    core_samples_mask[db.core_sample_indices_] = True
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0) # 类的数目
+    draw_pic(n_clusters, core_samples_mask, labels, X)
+    #==========接下来我们提前计算好距离============#
+    distance_matrix =  euclidean_distances(X)
+    db1 = DBSCAN(eps=0.3, min_samples=10, metric='precomputed').fit(distance_matrix)
+    labels1 = db1.labels_ # 每个点的标签
+    core_samples_mask1 = np.zeros_like(db1.labels_, dtype=bool)
+    core_samples_mask1[db1.core_sample_indices_] = True
+    n_clusters1 = len(set(labels1)) - (1 if -1 in labels1 else 0) # 类的数目
+    draw_pic(n_clusters1, core_samples_mask1, labels1, X)
+```
+
+最终将产生这样的图：
+
+![avatar](https://upload-images.jianshu.io/upload_images/1918847-cdccc3c565081ccb.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+# 3.建议阅读资料
+1. [用 sklearn 自定义距离函数](https://www.cnblogs.com/wanghuaijun/p/6264000.html)
+2. [开源代码：time-series-clustering](https://github.com/effa/time-series-clustering)
